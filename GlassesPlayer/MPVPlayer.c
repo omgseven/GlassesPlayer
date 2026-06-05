@@ -308,6 +308,23 @@ int mpv_player_has_new_frame(MPVPlayer *p) {
     return atomic_exchange(&p->frame_available, 0);
 }
 
+void mpv_player_set_volume(MPVPlayer *p, double volume) {
+    if (!p || !p->mpv) return;
+    mpv_set_property(p->mpv, "volume", MPV_FORMAT_DOUBLE, &volume);
+}
+
+double mpv_player_get_volume(MPVPlayer *p) {
+    if (!p || !p->mpv) return 100;
+    double vol = 100;
+    mpv_get_property(p->mpv, "volume", MPV_FORMAT_DOUBLE, &vol);
+    return vol;
+}
+
+void mpv_player_set_speed(MPVPlayer *p, double speed) {
+    if (!p || !p->mpv) return;
+    mpv_set_property(p->mpv, "speed", MPV_FORMAT_DOUBLE, &speed);
+}
+
 int mpv_player_poll_events(MPVPlayer *p) {
     if (!p || !p->mpv) return 0;
     int changed = 0;

@@ -24,7 +24,6 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
     private var lastControlsVisible = true
     private var cachedTexture: MTLTexture?
     private var cachedSurfaceID: UInt32 = 0
-    private var clickTimer: DispatchWorkItem?
     private var mouseDownOrigin: NSPoint?
     private var draggedDistance: CGFloat = 0
     private var didWarpCursor = false
@@ -129,8 +128,8 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(videoTexture, index: 0)
 
-        let sourceLayout = Int32(model?.sourceLayout ?? 0)
-        let displayMode = sourceLayout == 2 ? 0 : (model?.displayMode ?? 0)
+        let source = model?.sourceLayout ?? .sideBySide
+        let display: DisplayMode = source.is360 ? .leftEye : (model?.displayMode ?? .leftEye)
         let yaw = model?.cameraYaw ?? 0
         let pitch = model?.cameraPitch ?? 0
         let fov = model?.effectiveTanHalfVFOV ?? 1.0
@@ -138,37 +137,35 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
         let drawableWidth = Int(view.drawableSize.width)
         let drawableHeight = Int(view.drawableSize.height)
 
-        if displayMode == 2 {
-            // Both eyes side-by-side
+        if display == .both {
             let hw = drawableWidth / 2
             let halfAspect = Float(hw) / Float(drawableHeight)
 
-            // Left eye
             encoder.setViewport(MTLViewport(originX: 0, originY: 0,
                                             width: Double(hw), height: Double(drawableHeight),
                                             znear: 0, zfar: 1))
             var uniforms = ProjectionUniforms(cameraYaw: yaw, cameraPitch: pitch,
                                              tanHalfVFOV: fov, aspectRatio: halfAspect,
-                                             eyeIndex: 0, sourceLayout: sourceLayout)
+                                             eyeIndex: DisplayMode.leftEye.rawValue,
+                                             sourceLayout: source.rawValue)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ProjectionUniforms>.size, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
 
-            // Right eye
             encoder.setViewport(MTLViewport(originX: Double(hw), originY: 0,
                                             width: Double(hw), height: Double(drawableHeight),
                                             znear: 0, zfar: 1))
-            uniforms.eyeIndex = 1
+            uniforms.eyeIndex = DisplayMode.rightEye.rawValue
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ProjectionUniforms>.size, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         } else {
-            // Single eye
             let aspect = Float(drawableWidth) / Float(drawableHeight)
             encoder.setViewport(MTLViewport(originX: 0, originY: 0,
                                             width: Double(drawableWidth), height: Double(drawableHeight),
                                             znear: 0, zfar: 1))
             var uniforms = ProjectionUniforms(cameraYaw: yaw, cameraPitch: pitch,
                                              tanHalfVFOV: fov, aspectRatio: aspect,
-                                             eyeIndex: Int32(displayMode), sourceLayout: sourceLayout)
+                                             eyeIndex: display.rawValue,
+                                             sourceLayout: source.rawValue)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ProjectionUniforms>.size, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
@@ -254,11 +251,19 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
 
     private func handleGlobalMouseMoved(_ event: NSEvent) {
         guard let window = self.window, window.isKeyWindow else { return }
+        guard NSEvent.pressedMouseButtons == 0 else { return }
         let screenPoint = NSEvent.mouseLocation
         let windowRect = window.convertFromScreen(NSRect(origin: screenPoint, size: .zero))
         let location = convert(windowRect.origin, from: nil)
 
-        if model?.sourceLayout == 2 {
+        guard model?.cameraControl == .move else {
+            yawWrapOffset = 0
+            lastScreenPoint = nil
+            isSmoothing = false
+            return
+        }
+
+        if model?.sourceLayout.is360 == true {
             if didWarpCursor {
                 didWarpCursor = false
                 lastScreenPoint = screenPoint
@@ -333,14 +338,16 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 {
-            clickTimer?.cancel()
-            clickTimer = nil
-            window?.toggleFullScreen(nil)
+        if let contentRect = window?.contentLayoutRect,
+           event.locationInWindow.y > contentRect.maxY {
             return
         }
         mouseDownOrigin = NSEvent.mouseLocation
         draggedDistance = 0
+    }
+
+    private var shouldDragCamera: Bool {
+        model?.cameraControl == .drag
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -349,21 +356,26 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
         let dx = current.x - origin.x
         let dy = current.y - origin.y
         draggedDistance += hypot(dx, dy)
-        var frameOrigin = window.frame.origin
-        frameOrigin.x += dx
-        frameOrigin.y += dy
-        window.setFrameOrigin(frameOrigin)
+
+        if event.modifierFlags.contains(.option) || !shouldDragCamera {
+            var frameOrigin = window.frame.origin
+            frameOrigin.x += dx
+            frameOrigin.y += dy
+            window.setFrameOrigin(frameOrigin)
+        } else if model?.sourceLayout.is360 == true {
+            let sensitivity: Float = 0.005
+            let invert: Float = UserDefaults.standard.bool(forKey: "dragFollowsMouse") ? 1 : -1
+            model?.cameraYaw += Float(dx) * sensitivity * invert
+            model?.cameraPitch += Float(dy) * sensitivity * invert
+            model?.cameraPitch = min(.pi / 2, max(-.pi / 2, model?.cameraPitch ?? 0))
+        } else {
+            let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            onMouseMoved?(location, bounds.size)
+        }
         mouseDownOrigin = current
     }
 
     override func mouseUp(with event: NSEvent) {
-        if event.clickCount == 1 && draggedDistance < 3 {
-            let work = DispatchWorkItem { [weak self] in
-                self?.model?.togglePlayPause()
-            }
-            clickTimer = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-        }
         mouseDownOrigin = nil
         draggedDistance = 0
     }
@@ -374,7 +386,12 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
 
     override func scrollWheel(with event: NSEvent) {
         let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / 10.0 : event.scrollingDeltaY
-        onScrollWheel?(delta)
+        if event.modifierFlags.contains(.option) {
+            let direction: Double = UserDefaults.standard.bool(forKey: "naturalScrollVolume") ? 1 : -1
+            model?.setVolume((model?.volume ?? 100) + Double(delta) * direction)
+        } else {
+            onScrollWheel?(delta)
+        }
     }
 
     deinit {

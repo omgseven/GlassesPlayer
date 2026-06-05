@@ -45,6 +45,13 @@ int mpv_player_get_video_width(MPVPlayer *p);
 int mpv_player_get_video_height(MPVPlayer *p);
 int mpv_player_is_paused(MPVPlayer *p);
 
+// Volume (0-100)
+void mpv_player_set_volume(MPVPlayer *p, double volume);
+double mpv_player_get_volume(MPVPlayer *p);
+
+// Speed
+void mpv_player_set_speed(MPVPlayer *p, double speed);
+
 // Check if a new frame is available
 int mpv_player_has_new_frame(MPVPlayer *p);
 

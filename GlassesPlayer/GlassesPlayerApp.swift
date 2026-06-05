@@ -24,6 +24,10 @@ struct GlassesPlayerApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UserDefaults.standard.register(defaults: [
+            "clickToPlayPause": true,
+            "autoHideDelay": 3.0,
+        ])
         DispatchQueue.main.async {
             self.removeUnwantedMenus()
         }

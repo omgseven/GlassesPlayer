@@ -8,8 +8,12 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var isHoveringTransport = false
     @State private var hideTask: Task<Void, Never>?
+    @State private var showVolumeOSD = false
+    @State private var volumeOSDTask: Task<Void, Never>?
     @AppStorage("maxFOVDegrees") private var maxFOVDegrees: Double = 120
     @AppStorage("showControlsOnPause") private var showControlsOnPause: Bool = true
+    @AppStorage("autoHideDelay") private var autoHideDelay: Double = 3
+    @AppStorage("playMode") private var playMode: Int = PlayMode.stopAfterCurrent.rawValue
 
     private let videoTypes: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .avi, .mpeg2Video]
 
@@ -25,8 +29,8 @@ struct ContentView: View {
                 hideTask?.cancel()
                 if visible && model.isPlaying { scheduleHide() }
             }
-            .onChange(of: model.isPlaying) { _, playing in
-                handlePlayingChange(playing)
+            .onChange(of: model.playbackState) { _, state in
+                handlePlaybackStateChange(state)
             }
             .onChange(of: maxFOVDegrees) { _, newValue in
                 model.maxTanHalf = tan(Float(newValue / 2.0) * .pi / 180.0)
@@ -39,11 +43,53 @@ struct ContentView: View {
     private var mainStack: some View {
         ZStack {
             backgroundLayer
-            MetalPlayerView(model: model).ignoresSafeArea()
+            MetalPlayerView(model: model)
+                .ignoresSafeArea()
+                .onTapGesture(count: 2) {
+                    NSApp.keyWindow?.toggleFullScreen(nil)
+                }
+                .onTapGesture(count: 1) {
+                    guard clickToPlayPause else { return }
+                    model.togglePlayPause()
+                }
+            if showStereoPanel {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .ignoresSafeArea()
+                    .onTapGesture { showStereoPanel = false }
+            }
             transportOverlay
+            volumeOSD
         }
         .frame(minWidth: 320, minHeight: 200)
+        .onChange(of: model.volume) { _, _ in
+            showVolumeOSD = true
+            volumeOSDTask?.cancel()
+            volumeOSDTask = Task {
+                try? await Task.sleep(for: .seconds(1.2))
+                guard !Task.isCancelled else { return }
+                showVolumeOSD = false
+            }
+        }
     }
+
+    private var volumeOSD: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 13, weight: .medium))
+            Text("\(Int(model.volume))")
+                .font(.system(size: 14, weight: .semibold).monospacedDigit())
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.black.opacity(0.55), in: Capsule())
+        .opacity(showVolumeOSD ? 1 : 0)
+        .animation(.easeOut(duration: 0.2), value: showVolumeOSD)
+        .allowsHitTesting(false)
+    }
+
+    @AppStorage("clickToPlayPause") private var clickToPlayPause: Bool = true
 
     private func handleFileImport(_ result: Result<[URL], Error>) {
         if case .success(let urls) = result, let url = urls.first {
@@ -60,12 +106,39 @@ struct ContentView: View {
         }
     }
 
-    private func handlePlayingChange(_ playing: Bool) {
-        if !playing {
+    private func handlePlaybackStateChange(_ state: PlaybackState) {
+        switch state {
+        case .playing:
+            if model.controlsVisible { scheduleHide() }
+        case .paused:
             hideTask?.cancel()
             if showControlsOnPause { model.controlsVisible = true }
-        } else if model.controlsVisible {
-            scheduleHide()
+        case .ended:
+            hideTask?.cancel()
+            let mode = PlayMode(rawValue: playMode) ?? .stopAfterCurrent
+            switch mode {
+            case .stopAfterCurrent:
+                if showControlsOnPause { model.controlsVisible = true }
+            case .loopOne:
+                model.seek(to: 0)
+                model.togglePlayPause()
+            case .playList:
+                if model.hasNextFile {
+                    model.openNextFile()
+                } else {
+                    if showControlsOnPause { model.controlsVisible = true }
+                }
+            case .loopList:
+                if model.hasNextFile {
+                    model.openNextFile()
+                } else {
+                    model.seek(to: 0)
+                    model.togglePlayPause()
+                }
+            }
+        case .idle:
+            hideTask?.cancel()
+            model.controlsVisible = true
         }
     }
 
@@ -115,6 +188,7 @@ struct ContentView: View {
         HStack(spacing: 0) {
             HStack(spacing: 4) {
                 transportButton(icon: "folder", action: { showFileImporter = true })
+                VolumeKnob(volume: model.volume)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -146,7 +220,7 @@ struct ContentView: View {
                 .popover(isPresented: $showStereoPanel, arrowEdge: .bottom) {
                     stereoPanel
                 }
-                transportButton(icon: "gearshape", action: { showSettings.toggle() })
+                moreMenu
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -196,8 +270,15 @@ struct ContentView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 displaySegments
-                    .opacity(model.sourceLayout == 2 ? 0.4 : 1)
-                    .disabled(model.sourceLayout == 2)
+                    .opacity(model.sourceLayout.is360 ? 0.4 : 1)
+                    .disabled(model.sourceLayout.is360)
+            }
+
+            VStack(spacing: 5) {
+                Text("CAMERA")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                cameraControlSegments
             }
         }
         .padding(20)
@@ -206,13 +287,13 @@ struct ContentView: View {
 
     private var sourceSegments: some View {
         HStack(spacing: 1) {
-            segmentButton(isSelected: model.sourceLayout == 0, action: { model.sourceLayout = 0 }) {
+            segmentButton(isSelected: model.sourceLayout == .sideBySide, action: { model.sourceLayout = .sideBySide }) {
                 Image(systemName: "rectangle.split.2x1.fill")
             }
-            segmentButton(isSelected: model.sourceLayout == 1, action: { model.sourceLayout = 1 }) {
+            segmentButton(isSelected: model.sourceLayout == .topBottom, action: { model.sourceLayout = .topBottom }) {
                 Image(systemName: "rectangle.split.1x2.fill")
             }
-            segmentButton(isSelected: model.sourceLayout == 2, action: { model.sourceLayout = 2 }) {
+            segmentButton(isSelected: model.sourceLayout == .mono360, action: { model.sourceLayout = .mono360 }) {
                 Image(systemName: "circle.circle.fill")
             }
         }
@@ -221,11 +302,11 @@ struct ContentView: View {
     }
 
     private var displaySegments: some View {
-        let icon = model.sourceLayout == 0
+        let icon = model.sourceLayout.isHorizontal
             ? "rectangle.split.2x1.fill" : "rectangle.split.1x2.fill"
-        let horizontal = model.sourceLayout == 0
+        let horizontal = model.sourceLayout.isHorizontal
         return HStack(spacing: 1) {
-            segmentButton(isSelected: model.displayMode == 0, action: { model.displayMode = 0 }) {
+            segmentButton(isSelected: model.displayMode == .leftEye, action: { model.displayMode = .leftEye }) {
                 Image(systemName: icon)
                     .mask {
                         if horizontal {
@@ -235,7 +316,7 @@ struct ContentView: View {
                         }
                     }
             }
-            segmentButton(isSelected: model.displayMode == 1, action: { model.displayMode = 1 }) {
+            segmentButton(isSelected: model.displayMode == .rightEye, action: { model.displayMode = .rightEye }) {
                 Image(systemName: icon)
                     .mask {
                         if horizontal {
@@ -245,8 +326,21 @@ struct ContentView: View {
                         }
                     }
             }
-            segmentButton(isSelected: model.displayMode == 2, action: { model.displayMode = 2 }) {
+            segmentButton(isSelected: model.displayMode == .both, action: { model.displayMode = .both }) {
                 Image(systemName: icon)
+            }
+        }
+        .padding(2)
+        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+
+    private var cameraControlSegments: some View {
+        HStack(spacing: 1) {
+            segmentButton(isSelected: model.cameraControl == .move, action: { model.cameraControl = .move }) {
+                Image(systemName: "cursorarrow.motionlines")
+            }
+            segmentButton(isSelected: model.cameraControl == .drag, action: { model.cameraControl = .drag }) {
+                Image(systemName: "hand.draw")
             }
         }
         .padding(2)
@@ -278,13 +372,13 @@ struct ContentView: View {
 
     @ViewBuilder
     private var stereoIcon: some View {
-        if model.sourceLayout == 2 {
-            Image(systemName: "globe")
-        } else if model.displayMode == 2 {
+        if model.sourceLayout.is360 {
+            Image(systemName: "circle.circle.fill")
+        } else if model.displayMode == .both {
             Image(systemName: "visionpro.fill")
         } else {
-            let fillFirst = model.displayMode == 0
-            let horizontal = model.sourceLayout == 0
+            let fillFirst = model.displayMode == .leftEye
+            let horizontal = model.sourceLayout.isHorizontal
             ZStack {
                 Image(systemName: "visionpro.fill")
                     .mask { splitMask(showFirst: fillFirst, horizontal: horizontal) }
@@ -305,6 +399,49 @@ struct ContentView: View {
         }
     }
 
+    @AppStorage("playbackSpeed") private var playbackSpeed: Double = 1.0
+
+    private var moreMenu: some View {
+        Menu {
+            Button { showSettings.toggle() } label: {
+                Label("Settings…", systemImage: "wrench.adjustable.fill")
+            }
+            Picker(selection: $playMode) {
+                Label("Stop After Current", systemImage: "stop.circle").tag(PlayMode.stopAfterCurrent.rawValue)
+                Label("Loop Current", systemImage: "repeat.1").tag(PlayMode.loopOne.rawValue)
+                Label("Play All", systemImage: "text.line.first.and.arrowtriangle.forward").tag(PlayMode.playList.rawValue)
+                Label("Loop All", systemImage: "repeat").tag(PlayMode.loopList.rawValue)
+            } label: {
+                Label("Play Mode", systemImage: "flag.pattern.checkered")
+            }
+            Picker(selection: $playbackSpeed) {
+                Text("1×").tag(1.0)
+                Text("1.1×").tag(1.1)
+                Text("1.2×").tag(1.2)
+                Text("1.3×").tag(1.3)
+                Text("1.5×").tag(1.5)
+                Text("1.7×").tag(1.7)
+                Text("2×").tag(2.0)
+                Text("2.3×").tag(2.3)
+                Text("2.6×").tag(2.6)
+                Text("3×").tag(3.0)
+            } label: {
+                Label("Playback Speed", systemImage: "hare.fill")
+            }
+        } label: {
+            Image(systemName: "square.3.layers.3d.top.filled")
+                .font(.system(size: 13, weight: .medium))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 32, height: 32)
+        .onChange(of: playbackSpeed) { _, speed in
+            model.setSpeed(speed)
+        }
+    }
+
     private func transportButton(icon: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
@@ -318,7 +455,7 @@ struct ContentView: View {
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(for: .seconds(3))
+            try? await Task.sleep(for: .seconds(autoHideDelay))
             guard !Task.isCancelled, !isHoveringTransport else { return }
             model.controlsVisible = false
         }
@@ -398,6 +535,20 @@ struct VisualEffectBlur: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+// MARK: - Volume Knob
+
+struct VolumeKnob: View {
+    var volume: Double
+
+    var body: some View {
+        Image(systemName: "speaker.circle", variableValue: volume / 100)
+            .symbolVariableValueMode(.draw)
+            .font(.system(size: 17, weight: .medium))
+            .symbolRenderingMode(.hierarchical)
+            .frame(width: 32, height: 32)
+    }
 }
 
 #Preview {
