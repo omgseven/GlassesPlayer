@@ -1,3 +1,5 @@
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #include "MPVPlayer.h"
 #include <mpv/client.h>
 #include <mpv/render.h>
@@ -7,67 +9,23 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include <CoreFoundation/CoreFoundation.h>
-
-#define GL_SILENCE_DEPRECATION
+#include <IOSurface/IOSurface.h>
+#include <OpenGL/OpenGL.h>
 #include <OpenGL/gl3.h>
-
-// GLSL Shaders
-static const char *vert_src =
-    "#version 330 core\n"
-    "out vec2 ndc;\n"
-    "void main() {\n"
-    "    vec2 pos[4] = vec2[](vec2(-1,-1), vec2(1,-1), vec2(-1,1), vec2(1,1));\n"
-    "    gl_Position = vec4(pos[gl_VertexID], 0, 1);\n"
-    "    ndc = pos[gl_VertexID];\n"
-    "}\n";
-
-static const char *frag_src =
-    "#version 330 core\n"
-    "in vec2 ndc;\n"
-    "out vec4 fragColor;\n"
-    "uniform sampler2D videoTexture;\n"
-    "uniform float cameraYaw;\n"
-    "uniform float cameraPitch;\n"
-    "uniform float tanHalfVFOV;\n"
-    "uniform float aspectRatio;\n"
-    "uniform int eyeIndex;\n"
-    "uniform int sourceLayout;\n"
-    "\n"
-    "void main() {\n"
-    "    vec3 camDir = normalize(vec3(ndc.x * tanHalfVFOV * aspectRatio,\n"
-    "                                 ndc.y * tanHalfVFOV, 1.0));\n"
-    "    float cp = cos(cameraPitch), sp = sin(cameraPitch);\n"
-    "    vec3 p = vec3(camDir.x, camDir.y*cp + camDir.z*sp, -camDir.y*sp + camDir.z*cp);\n"
-    "    float cy = cos(cameraYaw), sy = sin(cameraYaw);\n"
-    "    vec3 dir = vec3(p.x*cy + p.z*sy, p.y, -p.x*sy + p.z*cy);\n"
-    "    if (dir.z <= 0.0) { fragColor = vec4(0,0,0,1); return; }\n"
-    "    float theta = atan(dir.x, dir.z);\n"
-    "    float phi = acos(clamp(dir.y, -1.0, 1.0));\n"
-    "    float rawU = theta / 3.14159265 + 0.5;\n"
-    "    float rawV = phi / 3.14159265;\n"
-    "    float texU, texV;\n"
-    "    if (sourceLayout == 0) {\n"
-    "        texU = rawU * 0.5 + float(eyeIndex) * 0.5;\n"
-    "        texV = rawV;\n"
-    "    } else {\n"
-    "        texU = rawU;\n"
-    "        texV = rawV * 0.5 + float(eyeIndex) * 0.5;\n"
-    "    }\n"
-    "    fragColor = texture(videoTexture, vec2(texU, texV));\n"
-    "}\n";
 
 struct MPVPlayer {
     mpv_handle *mpv;
     mpv_render_context *render_ctx;
 
-    // OpenGL resources
+    // Internal OpenGL context (headless)
+    CGLContextObj gl_context;
+
+    // FBO backed by IOSurface
     GLuint fbo;
     GLuint fbo_texture;
     int fbo_width;
     int fbo_height;
-    GLuint shader_program;
-    GLuint vao;
-    GLint loc_yaw, loc_pitch, loc_fov, loc_aspect, loc_tex, loc_eye, loc_layout;
+    IOSurfaceRef surface;
 
     // Cached properties
     double duration;
@@ -96,39 +54,6 @@ static void on_render_update(void *ctx) {
     atomic_store(&p->frame_available, 1);
 }
 
-static GLuint compile_shader(GLenum type, const char *src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, NULL);
-    glCompileShader(s);
-    GLint ok;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetShaderInfoLog(s, 512, NULL, log);
-        fprintf(stderr, "Shader compile error: %s\n", log);
-    }
-    return s;
-}
-
-static GLuint create_program(void) {
-    GLuint vs = compile_shader(GL_VERTEX_SHADER, vert_src);
-    GLuint fs = compile_shader(GL_FRAGMENT_SHADER, frag_src);
-    GLuint prog = glCreateProgram();
-    glAttachShader(prog, vs);
-    glAttachShader(prog, fs);
-    glLinkProgram(prog);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-    GLint ok;
-    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(prog, 512, NULL, log);
-        fprintf(stderr, "Program link error: %s\n", log);
-    }
-    return prog;
-}
-
 MPVPlayer *mpv_player_create(void) {
     MPVPlayer *p = calloc(1, sizeof(MPVPlayer));
     if (!p) return NULL;
@@ -138,6 +63,7 @@ MPVPlayer *mpv_player_create(void) {
 
     mpv_set_option_string(p->mpv, "vo", "libmpv");
     mpv_set_option_string(p->mpv, "hwdec", "auto");
+    mpv_set_option_string(p->mpv, "msg-level", "all=error");
     mpv_set_option_string(p->mpv, "keep-open", "yes");
     mpv_set_option_string(p->mpv, "idle", "yes");
     mpv_set_option_string(p->mpv, "input-default-bindings", "no");
@@ -165,6 +91,26 @@ MPVPlayer *mpv_player_create(void) {
 int mpv_player_init_gl(MPVPlayer *p) {
     if (!p || !p->mpv) return -1;
 
+    // Create a headless CGL context (no window needed)
+    CGLPixelFormatAttribute attrs[] = {
+        kCGLPFAOpenGLProfile, (CGLPixelFormatAttribute)kCGLOGLPVersion_3_2_Core,
+        kCGLPFAColorSize, (CGLPixelFormatAttribute)24,
+        kCGLPFAAlphaSize, (CGLPixelFormatAttribute)8,
+        kCGLPFAAllowOfflineRenderers,
+        (CGLPixelFormatAttribute)0
+    };
+
+    CGLPixelFormatObj pix;
+    GLint npix;
+    if (CGLChoosePixelFormat(attrs, &pix, &npix) != kCGLNoError) return -1;
+    if (CGLCreateContext(pix, NULL, &p->gl_context) != kCGLNoError) {
+        CGLDestroyPixelFormat(pix);
+        return -1;
+    }
+    CGLDestroyPixelFormat(pix);
+    CGLSetCurrentContext(p->gl_context);
+
+    // Initialize mpv render context
     mpv_opengl_init_params gl_init = {
         .get_proc_address = gl_get_proc_address,
         .get_proc_address_ctx = NULL,
@@ -177,60 +123,90 @@ int mpv_player_init_gl(MPVPlayer *p) {
     };
 
     if (mpv_render_context_create(&p->render_ctx, p->mpv, params) < 0) {
+        CGLDestroyContext(p->gl_context);
+        p->gl_context = NULL;
         return -1;
     }
 
     mpv_render_context_set_update_callback(p->render_ctx, on_render_update, p);
 
-    // Create projection shader
-    p->shader_program = create_program();
-    p->loc_yaw = glGetUniformLocation(p->shader_program, "cameraYaw");
-    p->loc_pitch = glGetUniformLocation(p->shader_program, "cameraPitch");
-    p->loc_fov = glGetUniformLocation(p->shader_program, "tanHalfVFOV");
-    p->loc_aspect = glGetUniformLocation(p->shader_program, "aspectRatio");
-    p->loc_tex = glGetUniformLocation(p->shader_program, "videoTexture");
-    p->loc_eye = glGetUniformLocation(p->shader_program, "eyeIndex");
-    p->loc_layout = glGetUniformLocation(p->shader_program, "sourceLayout");
-
-    // Create VAO (needed for core profile)
-    glGenVertexArrays(1, &p->vao);
-
-    // Create FBO for mpv render target
+    // Create FBO
     glGenFramebuffers(1, &p->fbo);
     glGenTextures(1, &p->fbo_texture);
 
     return 0;
 }
 
-static void ensure_fbo(MPVPlayer *p, int w, int h) {
-    if (p->fbo_width == w && p->fbo_height == h) return;
+static void ensure_surface(MPVPlayer *p, int w, int h) {
+    if (p->fbo_width == w && p->fbo_height == h && p->surface) return;
 
-    glBindTexture(GL_TEXTURE_2D, p->fbo_texture);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Release old surface
+    if (p->surface) {
+        CFRelease(p->surface);
+        p->surface = NULL;
+    }
 
+    // Create IOSurface using CFDictionary
+    int numKeys = 4;
+    const void *keys[4] = {
+        kIOSurfaceWidth,
+        kIOSurfaceHeight,
+        kIOSurfaceBytesPerElement,
+        kIOSurfacePixelFormat,
+    };
+    int width_val = w, height_val = h, bpe_val = 4;
+    unsigned int pixel_format = 'BGRA';
+    CFNumberRef values_num[4] = {
+        CFNumberCreate(NULL, kCFNumberIntType, &width_val),
+        CFNumberCreate(NULL, kCFNumberIntType, &height_val),
+        CFNumberCreate(NULL, kCFNumberIntType, &bpe_val),
+        CFNumberCreate(NULL, kCFNumberIntType, &pixel_format),
+    };
+    const void *values[4] = { values_num[0], values_num[1], values_num[2], values_num[3] };
+
+    CFDictionaryRef props = CFDictionaryCreate(NULL, keys, values, numKeys,
+                                               &kCFTypeDictionaryKeyCallBacks,
+                                               &kCFTypeDictionaryValueCallBacks);
+    p->surface = IOSurfaceCreate(props);
+    CFRelease(props);
+    for (int i = 0; i < 4; i++) CFRelease(values_num[i]);
+    if (!p->surface) return;
+
+    // Bind texture to IOSurface
+    CGLSetCurrentContext(p->gl_context);
+    glBindTexture(GL_TEXTURE_RECTANGLE, p->fbo_texture);
+    CGLTexImageIOSurface2D(p->gl_context, GL_TEXTURE_RECTANGLE,
+                           GL_RGBA8, w, h,
+                           GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV,
+                           p->surface, 0);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_RECTANGLE, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // Attach to FBO
     glBindFramebuffer(GL_FRAMEBUFFER, p->fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, p->fbo_texture, 0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE, p->fbo_texture, 0);
 
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        fprintf(stderr, "FBO incomplete: 0x%x\n", status);
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     p->fbo_width = w;
     p->fbo_height = h;
 }
 
-void mpv_player_render(MPVPlayer *p, int width, int height,
-                       float yaw, float pitch, float tanHalfFOV, float aspect,
-                       int displayMode, int sourceLayout) {
-    if (!p || !p->render_ctx) return;
+void mpv_player_render_frame(MPVPlayer *p) {
+    if (!p || !p->render_ctx || !p->gl_context) return;
+    if (p->video_width <= 0 || p->video_height <= 0) return;
 
-    // Determine render size (use video dimensions or viewport)
-    int rw = p->video_width > 0 ? p->video_width : width;
-    int rh = p->video_height > 0 ? p->video_height : height;
-    ensure_fbo(p, rw, rh);
+    CGLSetCurrentContext(p->gl_context);
 
-    // Step 1: mpv renders decoded frame to FBO
+    int rw = p->video_width;
+    int rh = p->video_height;
+    ensure_surface(p, rw, rh);
+    if (!p->surface) return;
+
     int fbo_id = (int)p->fbo;
     mpv_opengl_fbo mpv_fbo = {
         .fbo = fbo_id,
@@ -247,47 +223,17 @@ void mpv_player_render(MPVPlayer *p, int width, int height,
     };
 
     mpv_render_context_render(p->render_ctx, render_params);
+    glFlush();
+}
 
-    // Step 2: Render with projection shader to screen
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glClearColor(0, 0, 0, 1);
-    glViewport(0, 0, width, height);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDisable(GL_BLEND);
+IOSurfaceRef mpv_player_get_surface(MPVPlayer *p) {
+    if (!p) return NULL;
+    return p->surface;
+}
 
-    glUseProgram(p->shader_program);
-    glUniform1f(p->loc_yaw, yaw);
-    glUniform1f(p->loc_pitch, pitch);
-    glUniform1f(p->loc_fov, tanHalfFOV);
-    glUniform1i(p->loc_tex, 0);
-    glUniform1i(p->loc_layout, sourceLayout);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, p->fbo_texture);
-    glBindVertexArray(p->vao);
-
-    if (displayMode == 2) {
-        // Both eyes side-by-side: two passes with half-width viewports
-        int hw = width / 2;
-        float halfAspect = (float)hw / (float)height;
-
-        glViewport(0, 0, hw, height);
-        glUniform1f(p->loc_aspect, halfAspect);
-        glUniform1i(p->loc_eye, 0);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-        glViewport(hw, 0, hw, height);
-        glUniform1i(p->loc_eye, 1);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    } else {
-        // Single eye: 0=left, 1=right
-        glViewport(0, 0, width, height);
-        glUniform1f(p->loc_aspect, aspect);
-        glUniform1i(p->loc_eye, displayMode);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    }
-
-    glBindVertexArray(0);
+void mpv_player_report_swap(MPVPlayer *p) {
+    if (!p || !p->render_ctx) return;
+    mpv_render_context_report_swap(p->render_ctx);
 }
 
 void mpv_player_destroy(MPVPlayer *p) {
@@ -296,10 +242,13 @@ void mpv_player_destroy(MPVPlayer *p) {
         mpv_render_context_set_update_callback(p->render_ctx, NULL, NULL);
         mpv_render_context_free(p->render_ctx);
     }
-    if (p->fbo) glDeleteFramebuffers(1, &p->fbo);
-    if (p->fbo_texture) glDeleteTextures(1, &p->fbo_texture);
-    if (p->shader_program) glDeleteProgram(p->shader_program);
-    if (p->vao) glDeleteVertexArrays(1, &p->vao);
+    if (p->gl_context) {
+        CGLSetCurrentContext(p->gl_context);
+        if (p->fbo) glDeleteFramebuffers(1, &p->fbo);
+        if (p->fbo_texture) glDeleteTextures(1, &p->fbo_texture);
+        CGLDestroyContext(p->gl_context);
+    }
+    if (p->surface) CFRelease(p->surface);
     if (p->mpv) mpv_terminate_destroy(p->mpv);
     free(p);
 }
@@ -336,6 +285,18 @@ void mpv_player_stop(MPVPlayer *p) {
     mpv_command(p->mpv, cmd);
 }
 
+void mpv_player_frame_step(MPVPlayer *p) {
+    if (!p || !p->mpv) return;
+    const char *cmd[] = {"frame-step", NULL};
+    mpv_command(p->mpv, cmd);
+}
+
+void mpv_player_frame_back_step(MPVPlayer *p) {
+    if (!p || !p->mpv) return;
+    const char *cmd[] = {"frame-back-step", NULL};
+    mpv_command(p->mpv, cmd);
+}
+
 double mpv_player_get_duration(MPVPlayer *p) { return p ? p->duration : 0; }
 double mpv_player_get_time_pos(MPVPlayer *p) { return p ? p->time_pos : 0; }
 int mpv_player_get_video_width(MPVPlayer *p) { return p ? p->video_width : 0; }
@@ -345,11 +306,6 @@ int mpv_player_is_paused(MPVPlayer *p) { return p ? p->paused : 1; }
 int mpv_player_has_new_frame(MPVPlayer *p) {
     if (!p) return 0;
     return atomic_exchange(&p->frame_available, 0);
-}
-
-void mpv_player_report_swap(MPVPlayer *p) {
-    if (!p || !p->render_ctx) return;
-    mpv_render_context_report_swap(p->render_ctx);
 }
 
 int mpv_player_poll_events(MPVPlayer *p) {

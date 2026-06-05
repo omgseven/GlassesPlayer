@@ -14,10 +14,15 @@ final class VideoPlayerModel {
 
     var cameraYaw: Float = 0
     var cameraPitch: Float = 0
-    var mouseActivityTrigger = false
 
+    var controlsVisible = true
+    var isFullScreen = false
+
+    var isFrameStepping = false
     var displayMode: Int = 0      // 0=left, 1=right, 2=both
-    var sourceLayout: Int = 0     // 0=LR SBS, 1=TB SBS
+    var sourceLayout: Int = 0 {   // 0=LR SBS, 1=TB SBS, 2=360 Mono
+        didSet { zoomFactor = sourceLayout == 2 ? 2.0 : 1.0 }
+    }
 
     var zoomFactor: Float = 1.0
     var maxTanHalf: Float = 1.732
@@ -29,12 +34,20 @@ final class VideoPlayerModel {
     nonisolated(unsafe) var player: OpaquePointer?
     private var pollTimer: Timer?
     nonisolated(unsafe) private var fileURL: URL?
+    private var directoryFiles: [URL] = []
+    private var currentFileIndex: Int = -1
 
     init() {
         player = mpv_player_create()
     }
 
     func openFile(_ url: URL) {
+        if url.path == fileURL?.path && isFileOpen {
+            seek(to: 0)
+            if !isPlaying { togglePlayPause() }
+            return
+        }
+
         closeFile()
 
         guard url.startAccessingSecurityScopedResource() else { return }
@@ -54,9 +67,44 @@ final class VideoPlayerModel {
         }
 
         isFileOpen = true
+        isPlaying = true
         startPolling()
         mpv_player_play(p)
+        scanDirectory(for: url)
     }
+
+    private static let videoExtensions: Set<String> = [
+        "mp4", "mkv", "mov", "avi", "m4v", "wmv", "flv", "webm", "ts", "mpg", "mpeg", "3gp"
+    ]
+
+    private func scanDirectory(for url: URL) {
+        let dir = url.deletingLastPathComponent()
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            directoryFiles = []
+            currentFileIndex = -1
+            return
+        }
+        directoryFiles = contents
+            .filter { Self.videoExtensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+        currentFileIndex = directoryFiles.firstIndex(where: { $0.path == url.path }) ?? -1
+    }
+
+    func openNextFile() {
+        guard !directoryFiles.isEmpty, currentFileIndex >= 0 else { return }
+        let next = currentFileIndex + 1
+        guard next < directoryFiles.count else { return }
+        openFile(directoryFiles[next])
+    }
+
+    func openPreviousFile() {
+        guard !directoryFiles.isEmpty, currentFileIndex > 0 else { return }
+        openFile(directoryFiles[currentFileIndex - 1])
+    }
+
+    var hasNextFile: Bool { currentFileIndex >= 0 && currentFileIndex < directoryFiles.count - 1 }
+    var hasPreviousFile: Bool { currentFileIndex > 0 }
 
     func closeFile() {
         stopPolling()
@@ -77,11 +125,24 @@ final class VideoPlayerModel {
 
     func togglePlayPause() {
         guard let p = player, isFileOpen else { return }
+        isFrameStepping = false
         if isPlaying {
             mpv_player_pause(p)
         } else {
             mpv_player_play(p)
         }
+    }
+
+    func frameStep() {
+        guard let p = player, isFileOpen else { return }
+        isFrameStepping = true
+        mpv_player_frame_step(p)
+    }
+
+    func frameBackStep() {
+        guard let p = player, isFileOpen else { return }
+        isFrameStepping = true
+        mpv_player_frame_back_step(p)
     }
 
     func seek(to time: Double) {
@@ -93,26 +154,30 @@ final class VideoPlayerModel {
     func handleMouseMoved(_ location: CGPoint, viewSize: CGSize) {
         guard viewSize.width > 0, viewSize.height > 0 else { return }
 
-        let nx = Float(location.x / viewSize.width) * 2.0 - 1.0
-        let ny = Float(location.y / viewSize.height) * 2.0 - 1.0
+        var nx = Float(location.x / viewSize.width) * 2.0 - 1.0
+        var ny = Float(location.y / viewSize.height) * 2.0 - 1.0
+
+        let maxComp = max(abs(nx), abs(ny))
+        if maxComp > 1.0 {
+            nx /= maxComp
+            ny /= maxComp
+        }
 
         let aspect = Float(viewSize.width / viewSize.height)
         let effectiveHalfH = atan(effectiveTanHalfVFOV * aspect)
         let effectiveHalfV = atan(effectiveTanHalfVFOV)
         let maxYaw = max(0, Float.pi / 2.0 - effectiveHalfH)
         let maxPitch = max(0, Float.pi / 2.0 - effectiveHalfV)
-
         cameraYaw = nx * maxYaw
         cameraPitch = ny * maxPitch
-        mouseActivityTrigger.toggle()
     }
+
 
     func handleScrollWheel(_ deltaY: CGFloat) {
         let factor: Float = 0.1
         zoomFactor *= 1.0 + Float(deltaY) * factor
         let minZoom = 1.0 / maxTanHalf
         zoomFactor = max(minZoom, min(5.0, zoomFactor))
-        mouseActivityTrigger.toggle()
     }
 
     private func startPolling() {
