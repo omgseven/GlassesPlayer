@@ -55,10 +55,19 @@ struct SettingsView: View {
                     Toggle("Natural scroll direction for volume", isOn: $naturalScrollVolume)
                     Toggle("360° drag follows mouse direction", isOn: $dragFollowsMouse)
                 }
+
+                Section("Advanced") {
+                    Button("Open Log Directory") {
+                        let path = String(cString: mpv_player_get_log_dir())
+                        let url = URL(fileURLWithPath: path, isDirectory: true)
+                        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(url)
+                    }
+                }
             }
             .formStyle(.grouped)
         }
-        .frame(width: 480, height: 480)
+        .frame(width: 480, height: 520)
     }
 }
 

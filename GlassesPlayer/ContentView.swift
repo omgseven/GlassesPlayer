@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var showFileImporter = false
     @State private var showStereoPanel = false
     @State private var showSettings = false
+    @State private var isDropTargeted = false
     @State private var isHoveringTransport = false
     @State private var hideTask: Task<Void, Never>?
     @State private var showVolumeOSD = false
@@ -60,8 +61,29 @@ struct ContentView: View {
             }
             transportOverlay
             volumeOSD
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.accentColor, lineWidth: 3)
+                    .background(Color.accentColor.opacity(0.1))
+                    .padding(12)
+                    .ignoresSafeArea()
+                    .overlay {
+                        Label("释放以播放", systemImage: "film")
+                            .font(.title2.weight(.medium))
+                            .foregroundStyle(.white)
+                    }
+                    .allowsHitTesting(false)
+            }
         }
         .frame(minWidth: 320, minHeight: 200)
+        .dropDestination(for: URL.self) { urls, _ in
+            if let url = urls.first {
+                model.openFile(url)
+            }
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
         .onChange(of: model.volume) { _, _ in
             showVolumeOSD = true
             volumeOSDTask?.cancel()

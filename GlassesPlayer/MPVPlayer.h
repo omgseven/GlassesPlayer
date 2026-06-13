@@ -58,4 +58,7 @@ int mpv_player_has_new_frame(MPVPlayer *p);
 // Poll pending events. Returns bitmask of MPV_PROP_* for changed properties.
 int mpv_player_poll_events(MPVPlayer *p);
 
+// Returns the log directory path (~/Library/Logs/GlassesPlayer).
+const char *mpv_player_get_log_dir(void);
+
 #endif
