@@ -27,6 +27,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: [
             "clickToPlayPause": true,
             "autoHideDelay": 3.0,
+            "rememberProgress": true,
+            "rememberMode": true,
+            "showPlaylistButton": true,
+            "playlistMode": 0,
         ])
         DispatchQueue.main.async {
             self.removeUnwantedMenus()

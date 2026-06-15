@@ -129,7 +129,9 @@ final class PlayerMetalView: MTKView, MTKViewDelegate {
         encoder.setFragmentTexture(videoTexture, index: 0)
 
         let source = model?.sourceLayout ?? .sideBySide
-        let display: DisplayMode = source.is360 ? .leftEye : (model?.displayMode ?? .leftEye)
+        let display: DisplayMode = source.is360 ? .leftEye
+                               : source.is2D  ? .both
+                               : (model?.displayMode ?? .leftEye)
         let yaw = model?.cameraYaw ?? 0
         let pitch = model?.cameraPitch ?? 0
         let fov = model?.effectiveTanHalfVFOV ?? 1.0

@@ -11,6 +11,9 @@ struct ContentView: View {
     @State private var hideTask: Task<Void, Never>?
     @State private var showVolumeOSD = false
     @State private var volumeOSDTask: Task<Void, Never>?
+    @State private var playlistExpanded = false
+    @AppStorage("playlistMode") private var playlistMode: Int = PlaylistShowMode.manual.rawValue
+    @AppStorage("showPlaylistButton") private var showPlaylistButton: Bool = true
     @AppStorage("maxFOVDegrees") private var maxFOVDegrees: Double = 120
     @AppStorage("showControlsOnPause") private var showControlsOnPause: Bool = true
     @AppStorage("autoHideDelay") private var autoHideDelay: Double = 3
@@ -35,6 +38,11 @@ struct ContentView: View {
             }
             .onChange(of: maxFOVDegrees) { _, newValue in
                 model.maxTanHalf = tan(Float(newValue / 2.0) * .pi / 180.0)
+            }
+            .onChange(of: playlistMode) { _, newValue in
+                if PlaylistShowMode(rawValue: newValue) == .manual {
+                    playlistExpanded = true
+                }
             }
             .onAppear {
                 model.maxTanHalf = tan(Float(maxFOVDegrees / 2.0) * .pi / 180.0)
@@ -76,6 +84,9 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 320, minHeight: 200)
+        .overlay(alignment: .trailing) {
+            playlistLayer
+        }
         .dropDestination(for: URL.self) { urls, _ in
             if let url = urls.first {
                 model.openFile(url)
@@ -292,8 +303,8 @@ struct ContentView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 displaySegments
-                    .opacity(model.sourceLayout.is360 ? 0.4 : 1)
-                    .disabled(model.sourceLayout.is360)
+                    .opacity(model.sourceLayout.is360 || model.sourceLayout.is2D ? 0.4 : 1)
+                    .disabled(model.sourceLayout.is360 || model.sourceLayout.is2D)
             }
 
             VStack(spacing: 5) {
@@ -301,14 +312,19 @@ struct ContentView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 cameraControlSegments
+                    .opacity(model.sourceLayout.is2D ? 0.4 : 1)
+                    .disabled(model.sourceLayout.is2D)
             }
         }
         .padding(20)
-        .frame(width: 210)
+        .frame(width: 230)
     }
 
     private var sourceSegments: some View {
         HStack(spacing: 1) {
+            segmentButton(isSelected: model.sourceLayout == .mono2D, action: { model.sourceLayout = .mono2D }) {
+                Image(systemName: "rectangle.fill")
+            }
             segmentButton(isSelected: model.sourceLayout == .sideBySide, action: { model.sourceLayout = .sideBySide }) {
                 Image(systemName: "rectangle.split.2x1.fill")
             }
@@ -390,11 +406,125 @@ struct ContentView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: - Playlist Panel
+
+    private var playlistLayer: some View {
+        Group {
+            let mode = PlaylistShowMode(rawValue: playlistMode) ?? .manual
+            if mode == .manual && showPlaylistButton {
+                playlistManual
+            } else if mode == .auto {
+                playlistAuto
+            }
+        }
+    }
+
+    /// Manual mode: floating button + sliding panel, animated as one unit
+    private var playlistManual: some View {
+        ZStack(alignment: .trailing) {
+            // 面板：260px，滑入/滑出
+            if playlistExpanded {
+                PlaylistPanel(
+                    model: model,
+                    mode: Binding(
+                        get: { PlaylistShowMode(rawValue: playlistMode) ?? .manual },
+                        set: { playlistMode = $0.rawValue }
+                    )
+                )
+                .frame(width: 260)
+                .frame(maxHeight: .infinity)
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.35), radius: 14, x: -6)
+                .transition(.move(edge: .trailing))
+            }
+
+            // 悬浮按钮：始终在右边缘，展开时随面板左移
+            playlistToggle
+                .offset(x: playlistExpanded ? -260 : 0)
+        }
+        .frame(width: playlistExpanded ? 260 : 32)
+        .frame(maxHeight: .infinity)
+        .ignoresSafeArea()
+        .opacity(model.controlsVisible ? 1 : 0)
+        .animation(.spring(response: 0.35, dampingFraction: 0.82), value: playlistExpanded)
+        .animation(.easeOut(duration: 0.15), value: model.controlsVisible)
+        .allowsHitTesting(model.controlsVisible)
+    }
+
+    /// 悬浮展开按钮
+    private var playlistToggle: some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                playlistExpanded.toggle()
+            }
+        } label: {
+            Image(systemName: "chevron.compact.left")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.85))
+                .rotationEffect(.degrees(playlistExpanded ? 180 : 0))
+                .frame(width: 20, height: 44)
+                .contentShape(Rectangle())
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(
+                    Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.3), radius: 6, y: 2)
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 6)
+    }
+
+    /// Auto mode: panel slides in/out via offset
+    private var playlistAuto: some View {
+        ZStack(alignment: .trailing) {
+            PlaylistPanel(
+                model: model,
+                mode: Binding(
+                    get: { PlaylistShowMode(rawValue: playlistMode) ?? .manual },
+                    set: { playlistMode = $0.rawValue }
+                )
+            )
+            .frame(width: 260)
+            .frame(maxHeight: .infinity)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+            )
+            .offset(x: playlistExpanded ? 0 : 280)
+        }
+        .frame(width: 260)
+        .clipped()
+        .shadow(color: .black.opacity(0.35), radius: 14, x: -6)
+        .onContinuousHover { phase in
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.82)) {
+                switch phase {
+                case .active(let location):
+                    // 只在右侧 24px 内触发
+                    if location.x > 236 {
+                        playlistExpanded = true
+                    }
+                case .ended:
+                    if PlaylistShowMode(rawValue: playlistMode) == .auto {
+                        playlistExpanded = false
+                    }
+                }
+            }
+        }
+        .ignoresSafeArea()
+    }
+
     // MARK: - Helpers
 
     @ViewBuilder
     private var stereoIcon: some View {
-        if model.sourceLayout.is360 {
+        if model.sourceLayout.is2D {
+            Image(systemName: "rectangle.fill")
+        } else if model.sourceLayout.is360 {
             Image(systemName: "circle.circle.fill")
         } else if model.displayMode == .both {
             Image(systemName: "visionpro.fill")

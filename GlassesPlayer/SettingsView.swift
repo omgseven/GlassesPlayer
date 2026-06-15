@@ -8,6 +8,9 @@ struct SettingsView: View {
     @AppStorage("dragFollowsMouse") private var dragFollowsMouse: Bool = false
     @AppStorage("autoHideDelay") private var autoHideDelay: Double = 3
     @AppStorage("clickToPlayPause") private var clickToPlayPause: Bool = true
+    @AppStorage("rememberProgress") private var rememberProgress: Bool = true
+    @AppStorage("rememberMode") private var rememberMode: Bool = true
+    @AppStorage("showPlaylistButton") private var showPlaylistButton: Bool = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,6 +59,15 @@ struct SettingsView: View {
                     Toggle("360° drag follows mouse direction", isOn: $dragFollowsMouse)
                 }
 
+                Section("Playback Memory") {
+                    Toggle("Remember playback progress", isOn: $rememberProgress)
+                    Toggle("Remember 3D mode (layout & eye)", isOn: $rememberMode)
+                }
+
+                Section("Playlist") {
+                    Toggle("Show playlist expand button", isOn: $showPlaylistButton)
+                }
+
                 Section("Advanced") {
                     Button("Open Log Directory") {
                         let path = String(cString: mpv_player_get_log_dir())
@@ -67,7 +79,7 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 480, height: 520)
+        .frame(width: 480, height: 560)
     }
 }
 

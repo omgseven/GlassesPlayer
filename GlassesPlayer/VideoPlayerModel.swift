@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import QuartzCore
+import AppKit
 
 enum PlaybackState: Int {
     case idle = 0
@@ -13,9 +14,11 @@ enum SourceLayout: Int32 {
     case sideBySide = 0
     case topBottom = 1
     case mono360 = 2
+    case mono2D = 3
 
     var is360: Bool { self == .mono360 }
     var isHorizontal: Bool { self == .sideBySide }
+    var is2D: Bool { self == .mono2D }
 }
 
 enum DisplayMode: Int32 {
@@ -56,7 +59,10 @@ final class VideoPlayerModel {
     var displayMode: DisplayMode = .leftEye
     var cameraControl: CameraControl = .move
     var sourceLayout: SourceLayout = .sideBySide {
-        didSet { zoomFactor = sourceLayout.is360 ? 2.0 : 1.0 }
+        didSet {
+            zoomFactor = sourceLayout.is360 ? 2.0 : 1.0
+            if sourceLayout.is2D { cameraYaw = 0; cameraPitch = 0 }
+        }
     }
 
     var volume: Double = 100
@@ -79,12 +85,25 @@ final class VideoPlayerModel {
 
     nonisolated(unsafe) var player: OpaquePointer?
     private var pollTimer: Timer?
+    private var saveTimer: Timer?
+    private var pendingSeekTime: Double?
+    private let memory = PlaybackMemory()
     nonisolated(unsafe) private var fileURL: URL?
-    private var directoryFiles: [URL] = []
-    private var currentFileIndex: Int = -1
+    var directoryFiles: [URL] = []
+    var currentFileIndex: Int = -1
+
+    var currentFileURL: URL? { fileURL }
 
     init() {
         player = mpv_player_create()
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil, queue: nil
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.savePlaybackMemory()
+            }
+        }
     }
 
     func openFile(_ url: URL) {
@@ -116,6 +135,24 @@ final class VideoPlayerModel {
         startPolling()
         mpv_player_play(p)
         scanDirectory(for: url)
+
+        // Restore saved playback state
+        if let record = memory.load(url: url) {
+            let rememberMode = UserDefaults.standard.bool(forKey: "rememberMode")
+            let rememberProgress = UserDefaults.standard.bool(forKey: "rememberProgress")
+
+            if rememberMode {
+                if let layout = SourceLayout(rawValue: record.sourceLayout) {
+                    sourceLayout = layout
+                }
+                if let mode = DisplayMode(rawValue: record.displayMode) {
+                    displayMode = mode
+                }
+            }
+            if rememberProgress && record.progress > 0 && record.duration > 0 && record.progress < record.duration - 3 {
+                pendingSeekTime = record.progress
+            }
+        }
     }
 
     private static let videoExtensions: Set<String> = [
@@ -136,6 +173,11 @@ final class VideoPlayerModel {
         currentFileIndex = directoryFiles.firstIndex(where: { $0.path == url.path }) ?? -1
     }
 
+    func openFile(at index: Int) {
+        guard index >= 0, index < directoryFiles.count else { return }
+        openFile(directoryFiles[index])
+    }
+
     func openNextFile() {
         guard !directoryFiles.isEmpty, currentFileIndex >= 0 else { return }
         let next = currentFileIndex + 1
@@ -152,6 +194,7 @@ final class VideoPlayerModel {
     var hasPreviousFile: Bool { currentFileIndex > 0 }
 
     func closeFile() {
+        savePlaybackMemory()
         stopPolling()
         if let p = player {
             mpv_player_stop(p)
@@ -205,6 +248,7 @@ final class VideoPlayerModel {
     }
 
     func handleMouseMoved(_ location: CGPoint, viewSize: CGSize) {
+        guard !sourceLayout.is2D else { return }
         guard viewSize.width > 0, viewSize.height > 0 else { return }
 
         var nx = Float(location.x / viewSize.width) * 2.0 - 1.0
@@ -227,6 +271,7 @@ final class VideoPlayerModel {
 
 
     func handleScrollWheel(_ deltaY: CGFloat) {
+        guard !sourceLayout.is2D else { return }
         let factor: Float = 0.1
         zoomFactor *= 1.0 + Float(deltaY) * factor
         let minZoom = 1.0 / maxTanHalf
@@ -240,11 +285,19 @@ final class VideoPlayerModel {
                 self?.pollMPVEvents()
             }
         }
+        saveTimer?.invalidate()
+        saveTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.savePlaybackMemory()
+            }
+        }
     }
 
     private func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        saveTimer?.invalidate()
+        saveTimer = nil
     }
 
     private func pollMPVEvents() {
@@ -254,6 +307,12 @@ final class VideoPlayerModel {
 
         if flags & MPV_PROP_DURATION != 0 {
             duration = mpv_player_get_duration(p)
+            if let t = pendingSeekTime, duration > 0 {
+                pendingSeekTime = nil
+                if t > 0 && t < duration - 3 {
+                    seek(to: t)
+                }
+            }
         }
         if flags & MPV_PROP_TIME_POS != 0 {
             currentTime = mpv_player_get_time_pos(p)
@@ -273,6 +332,12 @@ final class VideoPlayerModel {
         if flags & MPV_PROP_EOF != 0 {
             playbackState = .ended
         }
+    }
+
+    private func savePlaybackMemory() {
+        guard let url = fileURL, isFileOpen, currentTime > 0, duration > 0 else { return }
+        memory.save(url: url, progress: currentTime, duration: duration,
+                    sourceLayout: sourceLayout, displayMode: displayMode)
     }
 
     deinit {
