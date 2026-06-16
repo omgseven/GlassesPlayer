@@ -76,17 +76,17 @@ struct PlaylistPanel: View {
 
     private var fileListView: some View {
         Group {
-            if model.directoryFiles.isEmpty {
+            if model.playlist.directoryFiles.isEmpty {
                 emptyState
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 1) {
-                            ForEach(Array(model.directoryFiles.enumerated()), id: \.offset) { index, url in
+                            ForEach(Array(model.playlist.directoryFiles.enumerated()), id: \.offset) { index, url in
                                 PlaylistRow(
                                     fileName: url.lastPathComponent,
-                                    isCurrent: index == model.currentFileIndex,
-                                    isPlaying: index == model.currentFileIndex && model.isPlaying
+                                    isCurrent: index == model.playlist.currentFileIndex,
+                                    isPlaying: index == model.playlist.currentFileIndex && model.isPlaying
                                 )
                                 .id(index)
                                 .onTapGesture(count: 2) {
@@ -97,11 +97,11 @@ struct PlaylistPanel: View {
                         .padding(.vertical, 4)
                     }
                     .onAppear {
-                        if model.currentFileIndex >= 0 {
-                            proxy.scrollTo(model.currentFileIndex, anchor: .center)
+                        if model.playlist.currentFileIndex >= 0 {
+                            proxy.scrollTo(model.playlist.currentFileIndex, anchor: .center)
                         }
                     }
-                    .onChange(of: model.currentFileIndex) { _, newIndex in
+                    .onChange(of: model.playlist.currentFileIndex) { _, newIndex in
                         withAnimation(.easeInOut(duration: 0.2)) {
                             proxy.scrollTo(newIndex, anchor: .center)
                         }

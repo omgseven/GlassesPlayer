@@ -124,6 +124,7 @@
 /* Begin PBXShellScriptBuildPhase section */
 		74F7AF9A2FD04D0A001909F6 /* Embed Dylibs */ = {
 			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
 			files = (
 			);

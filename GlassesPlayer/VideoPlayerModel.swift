@@ -51,17 +51,14 @@ final class VideoPlayerModel {
     var isPlaying: Bool { playbackState == .playing }
     var isFileOpen: Bool { playbackState != .idle }
 
-    var cameraYaw: Float = 0
-    var cameraPitch: Float = 0
+    let camera = CameraController()
 
     var controlsVisible = true
     var isFullScreen = false
     var displayMode: DisplayMode = .leftEye
-    var cameraControl: CameraControl = .move
     var sourceLayout: SourceLayout = .sideBySide {
         didSet {
-            zoomFactor = sourceLayout.is360 ? 2.0 : 1.0
-            if sourceLayout.is2D { cameraYaw = 0; cameraPitch = 0 }
+            camera.resetForLayout(sourceLayout)
         }
     }
 
@@ -76,26 +73,24 @@ final class VideoPlayerModel {
         if let p = player { mpv_player_set_speed(p, speed) }
     }
 
-    var zoomFactor: Float = 1.0
-    var maxTanHalf: Float = 1.732
-
-    var effectiveTanHalfVFOV: Float {
-        min(1.0 / zoomFactor, maxTanHalf)
+    @ObservationIgnored
+    private var _playMode: Int {
+        get { AppSettings.shared.playMode }
     }
 
-    nonisolated(unsafe) var player: OpaquePointer?
+    @ObservationIgnored nonisolated(unsafe) var player: OpaquePointer?
     private var pollTimer: Timer?
     private var saveTimer: Timer?
     private var pendingSeekTime: Double?
     private let memory = PlaybackMemory()
-    nonisolated(unsafe) private var fileURL: URL?
-    var directoryFiles: [URL] = []
-    var currentFileIndex: Int = -1
+    @ObservationIgnored nonisolated(unsafe) private var fileURL: URL?
+    let playlist = PlaylistManager()
 
     var currentFileURL: URL? { fileURL }
 
     init() {
         player = mpv_player_create()
+        Logger.info("VideoPlayerModel initialized")
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil, queue: nil
@@ -107,6 +102,7 @@ final class VideoPlayerModel {
     }
 
     func openFile(_ url: URL) {
+        Logger.info("Opening file: \(url.lastPathComponent)")
         if url.path == fileURL?.path && isFileOpen {
             seek(to: 0)
             if !isPlaying { togglePlayPause() }
@@ -134,12 +130,12 @@ final class VideoPlayerModel {
         playbackState = .playing
         startPolling()
         mpv_player_play(p)
-        scanDirectory(for: url)
+        playlist.scanDirectory(for: url)
 
         // Restore saved playback state
         if let record = memory.load(url: url) {
-            let rememberMode = UserDefaults.standard.bool(forKey: "rememberMode")
-            let rememberProgress = UserDefaults.standard.bool(forKey: "rememberProgress")
+            let rememberMode = AppSettings.shared.rememberMode
+            let rememberProgress = AppSettings.shared.rememberProgress
 
             if rememberMode {
                 if let layout = SourceLayout(rawValue: record.sourceLayout) {
@@ -155,45 +151,29 @@ final class VideoPlayerModel {
         }
     }
 
-    private static let videoExtensions: Set<String> = [
-        "mp4", "mkv", "mov", "avi", "m4v", "wmv", "flv", "webm", "ts", "mpg", "mpeg", "3gp"
-    ]
 
-    private func scanDirectory(for url: URL) {
-        let dir = url.deletingLastPathComponent()
-        let fm = FileManager.default
-        guard let contents = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
-            directoryFiles = []
-            currentFileIndex = -1
-            return
-        }
-        directoryFiles = contents
-            .filter { Self.videoExtensions.contains($0.pathExtension.lowercased()) }
-            .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-        currentFileIndex = directoryFiles.firstIndex(where: { $0.path == url.path }) ?? -1
-    }
+    // MARK: - Playback End Handling
 
     func openFile(at index: Int) {
-        guard index >= 0, index < directoryFiles.count else { return }
-        openFile(directoryFiles[index])
+        guard let url = playlist.fileURL(at: index) else { return }
+        openFile(url)
     }
 
     func openNextFile() {
-        guard !directoryFiles.isEmpty, currentFileIndex >= 0 else { return }
-        let next = currentFileIndex + 1
-        guard next < directoryFiles.count else { return }
-        openFile(directoryFiles[next])
+        guard let url = playlist.nextFileURL() else { return }
+        openFile(url)
     }
 
     func openPreviousFile() {
-        guard !directoryFiles.isEmpty, currentFileIndex > 0 else { return }
-        openFile(directoryFiles[currentFileIndex - 1])
+        guard let url = playlist.previousFileURL() else { return }
+        openFile(url)
     }
 
-    var hasNextFile: Bool { currentFileIndex >= 0 && currentFileIndex < directoryFiles.count - 1 }
-    var hasPreviousFile: Bool { currentFileIndex > 0 }
+    var hasNextFile: Bool { playlist.hasNextFile }
+    var hasPreviousFile: Bool { playlist.hasPreviousFile }
 
     func closeFile() {
+        Logger.info("Closing file: \(fileURL?.lastPathComponent ?? "nil")")
         savePlaybackMemory()
         stopPolling()
         if let p = player {
@@ -248,34 +228,11 @@ final class VideoPlayerModel {
     }
 
     func handleMouseMoved(_ location: CGPoint, viewSize: CGSize) {
-        guard !sourceLayout.is2D else { return }
-        guard viewSize.width > 0, viewSize.height > 0 else { return }
-
-        var nx = Float(location.x / viewSize.width) * 2.0 - 1.0
-        var ny = Float(location.y / viewSize.height) * 2.0 - 1.0
-
-        let maxComp = max(abs(nx), abs(ny))
-        if maxComp > 1.0 {
-            nx /= maxComp
-            ny /= maxComp
-        }
-
-        let aspect = Float(viewSize.width / viewSize.height)
-        let effectiveHalfH = atan(effectiveTanHalfVFOV * aspect)
-        let effectiveHalfV = atan(effectiveTanHalfVFOV)
-        let maxYaw = max(0, Float.pi / 2.0 - effectiveHalfH)
-        let maxPitch = max(0, Float.pi / 2.0 - effectiveHalfV)
-        cameraYaw = nx * maxYaw
-        cameraPitch = ny * maxPitch
+        camera.handleMouseMoved(location, viewSize: viewSize, sourceLayout: sourceLayout)
     }
 
-
     func handleScrollWheel(_ deltaY: CGFloat) {
-        guard !sourceLayout.is2D else { return }
-        let factor: Float = 0.1
-        zoomFactor *= 1.0 + Float(deltaY) * factor
-        let minZoom = 1.0 / maxTanHalf
-        zoomFactor = max(minZoom, min(5.0, zoomFactor))
+        camera.handleScrollWheel(deltaY, sourceLayout: sourceLayout)
     }
 
     private func startPolling() {
@@ -330,7 +287,42 @@ final class VideoPlayerModel {
             videoHeight = Int(mpv_player_get_video_height(p))
         }
         if flags & MPV_PROP_EOF != 0 {
+            handlePlaybackEnd()
+        }
+    }
+
+    // MARK: - Playback End Handling
+
+    private func handlePlaybackEnd() {
+        let mode = PlayMode(rawValue: _playMode) ?? .stopAfterCurrent
+        Logger.info("Playback ended, mode: \(mode)")
+        switch mode {
+        case .stopAfterCurrent:
             playbackState = .ended
+        case .loopOne:
+            seek(to: 0)
+            if let p = player {
+                mpv_player_play(p)
+                playbackState = .playing
+            }
+        case .playList:
+            if hasNextFile {
+                openNextFile()
+            } else {
+                playbackState = .ended
+            }
+        case .loopList:
+            if hasNextFile {
+                openNextFile()
+            } else if let first = playlist.firstFileURL() {
+                openFile(first)
+            } else {
+                seek(to: 0)
+                if let p = player {
+                    mpv_player_play(p)
+                    playbackState = .playing
+                }
+            }
         }
     }
 

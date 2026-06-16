@@ -2,16 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("maxFOVDegrees") private var maxFOVDegrees: Double = 120
-    @AppStorage("showControlsOnPause") private var showControlsOnPause: Bool = true
-    @AppStorage("naturalScrollVolume") private var naturalScrollVolume: Bool = false
-    @AppStorage("dragFollowsMouse") private var dragFollowsMouse: Bool = false
-    @AppStorage("autoHideDelay") private var autoHideDelay: Double = 3
-    @AppStorage("clickToPlayPause") private var clickToPlayPause: Bool = true
-    @AppStorage("rememberProgress") private var rememberProgress: Bool = true
-    @AppStorage("rememberMode") private var rememberMode: Bool = true
-    @AppStorage("showPlaylistButton") private var showPlaylistButton: Bool = true
-    @AppStorage("appLanguage") private var appLanguageRaw: String = ""
+    @Bindable private var settings = AppSettings.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,46 +24,65 @@ struct SettingsView: View {
             Form {
                 Section(String(localized: L10n.Settings.sectionProjection)) {
                     VStack(spacing: 16) {
-                        FOVSectorControl(degrees: $maxFOVDegrees)
+                        FOVSectorControl(degrees: $settings.maxFOVDegrees)
                             .frame(height: 120)
                         Text(L10n.Settings.fovHint)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 4)
+
+                    HStack(spacing: 8) {
+                        Text(L10n.Settings.cursorOpacity)
+                            .fixedSize()
+                            .frame(width: 160, alignment: .leading)
+                        TickSlider(value: $settings.cursorOpacity,
+                                   range: 0...100, tickInterval: 10, snapInterval: 1)
+                        // 实时预览圆形光标
+                        Circle()
+                            .fill(.white.opacity(settings.cursorOpacity / 100.0))
+                            .frame(width: 19, height: 19)
+                            .overlay(
+                                Circle().stroke(.secondary.opacity(0.3), lineWidth: 0.5)
+                            )
+                            .frame(width: 40)
+                    }
                 }
 
                 Section(String(localized: L10n.Settings.sectionToolbar)) {
-                    Toggle(isOn: $showControlsOnPause) {
+                    Toggle(isOn: $settings.showControlsOnPause) {
                         Text(L10n.Settings.showToolbarPaused)
                     }
-                    HStack {
+                    HStack(spacing: 8) {
                         Text(L10n.Settings.autoHideDelay)
-                        Spacer()
-                        Text("\(String(format: "%.1f", autoHideDelay))s")
+                            .fixedSize()
+                            .frame(width: 160, alignment: .leading)
+                        TickSlider(value: $settings.autoHideDelay,
+                                   range: 1...10, tickInterval: 1, snapInterval: 0.5)
+                        Text("\(String(format: "%.1f", settings.autoHideDelay))s")
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
+                            .frame(width: 40, alignment: .trailing)
                     }
-                    Slider(value: $autoHideDelay, in: 1...10, step: 0.5)
                 }
 
                 Section(String(localized: L10n.Settings.sectionInteraction)) {
-                    Toggle(isOn: $clickToPlayPause) { Text(L10n.Settings.clickToPlay) }
-                    Toggle(isOn: $naturalScrollVolume) { Text(L10n.Settings.naturalScroll) }
-                    Toggle(isOn: $dragFollowsMouse) { Text(L10n.Settings.dragFollowsMouse) }
+                    Toggle(isOn: $settings.clickToPlayPause) { Text(L10n.Settings.clickToPlay) }
+                    Toggle(isOn: $settings.naturalScrollVolume) { Text(L10n.Settings.naturalScroll) }
+                    Toggle(isOn: $settings.dragFollowsMouse) { Text(L10n.Settings.dragFollowsMouse) }
                 }
 
                 Section(String(localized: L10n.Settings.sectionPlaybackMemory)) {
-                    Toggle(isOn: $rememberProgress) { Text(L10n.Settings.rememberProgress) }
-                    Toggle(isOn: $rememberMode) { Text(L10n.Settings.rememberMode) }
+                    Toggle(isOn: $settings.rememberProgress) { Text(L10n.Settings.rememberProgress) }
+                    Toggle(isOn: $settings.rememberMode) { Text(L10n.Settings.rememberMode) }
                 }
 
                 Section(String(localized: L10n.Settings.sectionPlaylist)) {
-                    Toggle(isOn: $showPlaylistButton) { Text(L10n.Settings.showPlaylistButton) }
+                    Toggle(isOn: $settings.showPlaylistButton) { Text(L10n.Settings.showPlaylistButton) }
                 }
 
                 Section(String(localized: L10n.Settings.sectionLanguage)) {
-                    Picker(selection: $appLanguageRaw) {
+                    Picker(selection: $settings.appLanguage) {
                         ForEach(AppLanguage.allCases) { lang in
                             Text(lang.displayName).tag(lang.rawValue)
                         }
@@ -217,6 +227,51 @@ struct FOVSectorControl: View {
             .font(.system(size: 14, weight: .semibold).monospacedDigit())
             .foregroundStyle(.primary)
             .position(x: center.x, y: center.y - rayLength / 2.5)
+    }
+}
+
+// MARK: - Tick Slider (NSSlider wrapper)
+
+struct TickSlider: NSViewRepresentable {
+    @Binding var value: Double
+    var range: ClosedRange<Double>
+    var tickInterval: Double
+    var snapInterval: Double
+
+    func makeNSView(context: Context) -> NSSlider {
+        let slider = NSSlider(
+            value: value,
+            minValue: range.lowerBound,
+            maxValue: range.upperBound,
+            target: context.coordinator,
+            action: #selector(Coordinator.valueChanged(_:))
+        )
+        slider.numberOfTickMarks = Int((range.upperBound - range.lowerBound) / tickInterval) + 1
+        slider.allowsTickMarkValuesOnly = false
+        slider.isContinuous = true
+        slider.controlSize = .regular
+        return slider
+    }
+
+    func updateNSView(_ nsView: NSSlider, context: Context) {
+        if abs(nsView.doubleValue - value) > 0.001 {
+            nsView.doubleValue = value
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject {
+        var parent: TickSlider
+        init(_ parent: TickSlider) { self.parent = parent }
+
+        @objc func valueChanged(_ sender: NSSlider) {
+            let raw = sender.doubleValue
+            let snapped = (raw / parent.snapInterval).rounded() * parent.snapInterval
+            parent.value = min(parent.range.upperBound, max(parent.range.lowerBound, snapped))
+        }
     }
 }
 

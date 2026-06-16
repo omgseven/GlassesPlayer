@@ -12,12 +12,7 @@ struct ContentView: View {
     @State private var showVolumeOSD = false
     @State private var volumeOSDTask: Task<Void, Never>?
     @State private var playlistExpanded = false
-    @AppStorage("playlistMode") private var playlistMode: Int = PlaylistShowMode.manual.rawValue
-    @AppStorage("showPlaylistButton") private var showPlaylistButton: Bool = true
-    @AppStorage("maxFOVDegrees") private var maxFOVDegrees: Double = 120
-    @AppStorage("showControlsOnPause") private var showControlsOnPause: Bool = true
-    @AppStorage("autoHideDelay") private var autoHideDelay: Double = 3
-    @AppStorage("playMode") private var playMode: Int = PlayMode.stopAfterCurrent.rawValue
+    @Bindable private var settings = AppSettings.shared
 
     private let videoTypes: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .avi, .mpeg2Video]
 
@@ -36,16 +31,16 @@ struct ContentView: View {
             .onChange(of: model.playbackState) { _, state in
                 handlePlaybackStateChange(state)
             }
-            .onChange(of: maxFOVDegrees) { _, newValue in
-                model.maxTanHalf = tan(Float(newValue / 2.0) * .pi / 180.0)
+            .onChange(of: settings.maxFOVDegrees) { _, newValue in
+                model.camera.maxTanHalf = tan(Float(newValue / 2.0) * .pi / 180.0)
             }
-            .onChange(of: playlistMode) { _, newValue in
+            .onChange(of: settings.playlistMode) { _, newValue in
                 if PlaylistShowMode(rawValue: newValue) == .manual {
                     playlistExpanded = true
                 }
             }
             .onAppear {
-                model.maxTanHalf = tan(Float(maxFOVDegrees / 2.0) * .pi / 180.0)
+                model.camera.maxTanHalf = tan(Float(settings.maxFOVDegrees / 2.0) * .pi / 180.0)
             }
     }
 
@@ -58,7 +53,7 @@ struct ContentView: View {
                     NSApp.keyWindow?.toggleFullScreen(nil)
                 }
                 .onTapGesture(count: 1) {
-                    guard clickToPlayPause else { return }
+                    guard settings.clickToPlayPause else { return }
                     model.togglePlayPause()
                 }
             if showStereoPanel {
@@ -126,8 +121,6 @@ struct ContentView: View {
         .allowsHitTesting(false)
     }
 
-    @AppStorage("clickToPlayPause") private var clickToPlayPause: Bool = true
-
     private func handleFileImport(_ result: Result<[URL], Error>) {
         if case .success(let urls) = result, let url = urls.first {
             model.openFile(url)
@@ -149,30 +142,10 @@ struct ContentView: View {
             if model.controlsVisible { scheduleHide() }
         case .paused:
             hideTask?.cancel()
-            if showControlsOnPause { model.controlsVisible = true }
+            if settings.showControlsOnPause { model.controlsVisible = true }
         case .ended:
             hideTask?.cancel()
-            let mode = PlayMode(rawValue: playMode) ?? .stopAfterCurrent
-            switch mode {
-            case .stopAfterCurrent:
-                if showControlsOnPause { model.controlsVisible = true }
-            case .loopOne:
-                model.seek(to: 0)
-                model.togglePlayPause()
-            case .playList:
-                if model.hasNextFile {
-                    model.openNextFile()
-                } else {
-                    if showControlsOnPause { model.controlsVisible = true }
-                }
-            case .loopList:
-                if model.hasNextFile {
-                    model.openNextFile()
-                } else {
-                    model.seek(to: 0)
-                    model.togglePlayPause()
-                }
-            }
+            if settings.showControlsOnPause { model.controlsVisible = true }
         case .idle:
             hideTask?.cancel()
             model.controlsVisible = true
@@ -378,10 +351,10 @@ struct ContentView: View {
 
     private var cameraControlSegments: some View {
         HStack(spacing: 1) {
-            segmentButton(isSelected: model.cameraControl == .move, action: { model.cameraControl = .move }) {
+            segmentButton(isSelected: model.camera.cameraControl == .move, action: { model.camera.cameraControl = .move }) {
                 Image(systemName: "cursorarrow.motionlines")
             }
-            segmentButton(isSelected: model.cameraControl == .drag, action: { model.cameraControl = .drag }) {
+            segmentButton(isSelected: model.camera.cameraControl == .drag, action: { model.camera.cameraControl = .drag }) {
                 Image(systemName: "hand.draw")
             }
         }
@@ -414,8 +387,8 @@ struct ContentView: View {
 
     private var playlistLayer: some View {
         Group {
-            let mode = PlaylistShowMode(rawValue: playlistMode) ?? .manual
-            if mode == .manual && showPlaylistButton {
+            let mode = PlaylistShowMode(rawValue: settings.playlistMode) ?? .manual
+            if mode == .manual && settings.showPlaylistButton {
                 playlistManual
             } else if mode == .auto {
                 playlistAuto
@@ -431,8 +404,8 @@ struct ContentView: View {
                 PlaylistPanel(
                     model: model,
                     mode: Binding(
-                        get: { PlaylistShowMode(rawValue: playlistMode) ?? .manual },
-                        set: { playlistMode = $0.rawValue }
+                        get: { PlaylistShowMode(rawValue: settings.playlistMode) ?? .manual },
+                        set: { settings.playlistMode = $0.rawValue }
                     )
                 )
                 .frame(width: 260)
@@ -488,8 +461,8 @@ struct ContentView: View {
             PlaylistPanel(
                 model: model,
                 mode: Binding(
-                    get: { PlaylistShowMode(rawValue: playlistMode) ?? .manual },
-                    set: { playlistMode = $0.rawValue }
+                    get: { PlaylistShowMode(rawValue: settings.playlistMode) ?? .manual },
+                    set: { settings.playlistMode = $0.rawValue }
                 )
             )
             .frame(width: 260)
@@ -513,7 +486,7 @@ struct ContentView: View {
                         playlistExpanded = true
                     }
                 case .ended:
-                    if PlaylistShowMode(rawValue: playlistMode) == .auto {
+                    if PlaylistShowMode(rawValue: settings.playlistMode) == .auto {
                         playlistExpanded = false
                     }
                 }
@@ -555,14 +528,12 @@ struct ContentView: View {
         }
     }
 
-    @AppStorage("playbackSpeed") private var playbackSpeed: Double = 1.0
-
     private var moreMenu: some View {
         Menu {
             Button { showSettings.toggle() } label: {
                 Label { Text(L10n.Menu.settings) } icon: { Image(systemName: "wrench.adjustable.fill") }
             }
-            Picker(selection: $playMode) {
+            Picker(selection: $settings.playMode) {
                 Label { Text(L10n.PlayMode.stopAfterCurrent) } icon: { Image(systemName: "stop.circle") }
                     .tag(PlayMode.stopAfterCurrent.rawValue)
                 Label { Text(L10n.PlayMode.loopOne) } icon: { Image(systemName: "repeat.1") }
@@ -574,7 +545,7 @@ struct ContentView: View {
             } label: {
                 Label { Text(L10n.Menu.playMode) } icon: { Image(systemName: "flag.pattern.checkered") }
             }
-            Picker(selection: $playbackSpeed) {
+            Picker(selection: $settings.playbackSpeed) {
                 Text("1×").tag(1.0)
                 Text("1.1×").tag(1.1)
                 Text("1.2×").tag(1.2)
@@ -597,7 +568,7 @@ struct ContentView: View {
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .frame(width: 32, height: 32)
-        .onChange(of: playbackSpeed) { _, speed in
+        .onChange(of: settings.playbackSpeed) { _, speed in
             model.setSpeed(speed)
         }
     }
@@ -615,7 +586,7 @@ struct ContentView: View {
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(for: .seconds(autoHideDelay))
+            try? await Task.sleep(for: .seconds(settings.autoHideDelay))
             guard !Task.isCancelled, !isHoveringTransport else { return }
             model.controlsVisible = false
         }

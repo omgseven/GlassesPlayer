@@ -46,6 +46,7 @@ enum L10n {
         static let sectionLanguage = LocalizedStringResource("settings_section_language")
 
         static let fovHint = LocalizedStringResource("settings_fov_hint")
+        static let cursorOpacity = LocalizedStringResource("settings_cursor_opacity")
         static let showToolbarPaused = LocalizedStringResource("settings_show_toolbar_paused")
         static let autoHideDelay = LocalizedStringResource("settings_auto_hide_delay")
         static let clickToPlay = LocalizedStringResource("settings_click_to_play")

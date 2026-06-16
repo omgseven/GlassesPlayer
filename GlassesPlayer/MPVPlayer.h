@@ -61,4 +61,10 @@ int mpv_player_poll_events(MPVPlayer *p);
 // Returns the log directory path (~/Library/Logs/GlassesPlayer).
 const char *mpv_player_get_log_dir(void);
 
+// Write a tagged message to the current session log file.
+void mpv_player_log_message(const char *tag, const char *message);
+
+// Returns the current session log file path (NULL if not initialized).
+const char *mpv_player_get_log_path(void);
+
 #endif

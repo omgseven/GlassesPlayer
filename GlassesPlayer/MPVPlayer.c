@@ -49,6 +49,7 @@ struct MPVPlayer {
 
 static FILE *log_file = NULL;
 static char log_dir_path[1024] = {0};
+static char log_file_path[1280] = {0};
 
 static void ensure_log_dir(void) {
     if (log_dir_path[0] != '\0') return;
@@ -84,6 +85,9 @@ static void init_log_file(void) {
              t->tm_hour, t->tm_min, t->tm_sec);
 
     log_file = fopen(path, "w");
+    if (log_file) {
+        strncpy(log_file_path, path, sizeof(log_file_path) - 1);
+    }
 }
 
 static void mpv_log(const char *fmt, ...) {
@@ -102,6 +106,21 @@ static void mpv_log(const char *fmt, ...) {
 const char *mpv_player_get_log_dir(void) {
     ensure_log_dir();
     return log_dir_path;
+}
+
+void mpv_player_log_message(const char *tag, const char *message) {
+    if (!log_file) init_log_file();
+    if (!log_file) return;
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    fprintf(log_file, "[%02d:%02d:%02d] [%s] %s\n",
+            t->tm_hour, t->tm_min, t->tm_sec, tag, message);
+    fflush(log_file);
+}
+
+const char *mpv_player_get_log_path(void) {
+    if (log_file_path[0] == '\0') return NULL;
+    return log_file_path;
 }
 
 // MARK: - GL helpers
