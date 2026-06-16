@@ -76,9 +76,13 @@ struct ContentView: View {
                     .padding(12)
                     .ignoresSafeArea()
                     .overlay {
-                        Label("释放以播放", systemImage: "film")
-                            .font(.title2.weight(.medium))
-                            .foregroundStyle(.white)
+                        Label {
+                            Text(L10n.Common.dropToPlay)
+                        } icon: {
+                            Image(systemName: "film")
+                        }
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(.white)
                     }
                     .allowsHitTesting(false)
             }
@@ -288,18 +292,18 @@ struct ContentView: View {
 
     private var stereoPanel: some View {
         VStack(spacing: 14) {
-            Text("Stereo & source")
+            Text(L10n.Stereo.panelTitle)
                 .font(.subheadline.weight(.semibold))
 
             VStack(spacing: 5) {
-                Text("SOURCE")
+                Text(L10n.Stereo.labelSource)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 sourceSegments
             }
 
             VStack(spacing: 5) {
-                Text("DISPLAY")
+                Text(L10n.Stereo.labelDisplay)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 displaySegments
@@ -308,7 +312,7 @@ struct ContentView: View {
             }
 
             VStack(spacing: 5) {
-                Text("CAMERA")
+                Text(L10n.Stereo.labelCamera)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 cameraControlSegments
@@ -556,15 +560,19 @@ struct ContentView: View {
     private var moreMenu: some View {
         Menu {
             Button { showSettings.toggle() } label: {
-                Label("Settings…", systemImage: "wrench.adjustable.fill")
+                Label { Text(L10n.Menu.settings) } icon: { Image(systemName: "wrench.adjustable.fill") }
             }
             Picker(selection: $playMode) {
-                Label("Stop After Current", systemImage: "stop.circle").tag(PlayMode.stopAfterCurrent.rawValue)
-                Label("Loop Current", systemImage: "repeat.1").tag(PlayMode.loopOne.rawValue)
-                Label("Play All", systemImage: "text.line.first.and.arrowtriangle.forward").tag(PlayMode.playList.rawValue)
-                Label("Loop All", systemImage: "repeat").tag(PlayMode.loopList.rawValue)
+                Label { Text(L10n.PlayMode.stopAfterCurrent) } icon: { Image(systemName: "stop.circle") }
+                    .tag(PlayMode.stopAfterCurrent.rawValue)
+                Label { Text(L10n.PlayMode.loopOne) } icon: { Image(systemName: "repeat.1") }
+                    .tag(PlayMode.loopOne.rawValue)
+                Label { Text(L10n.PlayMode.playAll) } icon: { Image(systemName: "text.line.first.and.arrowtriangle.forward") }
+                    .tag(PlayMode.playList.rawValue)
+                Label { Text(L10n.PlayMode.loopAll) } icon: { Image(systemName: "repeat") }
+                    .tag(PlayMode.loopList.rawValue)
             } label: {
-                Label("Play Mode", systemImage: "flag.pattern.checkered")
+                Label { Text(L10n.Menu.playMode) } icon: { Image(systemName: "flag.pattern.checkered") }
             }
             Picker(selection: $playbackSpeed) {
                 Text("1×").tag(1.0)
@@ -578,7 +586,7 @@ struct ContentView: View {
                 Text("2.6×").tag(2.6)
                 Text("3×").tag(3.0)
             } label: {
-                Label("Playback Speed", systemImage: "hare.fill")
+                Label { Text(L10n.Menu.playbackSpeed) } icon: { Image(systemName: "hare.fill") }
             }
         } label: {
             Image(systemName: "square.3.layers.3d.top.filled")

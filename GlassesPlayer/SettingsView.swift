@@ -11,11 +11,12 @@ struct SettingsView: View {
     @AppStorage("rememberProgress") private var rememberProgress: Bool = true
     @AppStorage("rememberMode") private var rememberMode: Bool = true
     @AppStorage("showPlaylistButton") private var showPlaylistButton: Bool = true
+    @AppStorage("appLanguage") private var appLanguageRaw: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Settings")
+                Text(L10n.Settings.title)
                     .font(.title2.bold())
                 Spacer()
                 Button(action: { dismiss() }) {
@@ -30,21 +31,23 @@ struct SettingsView: View {
             .padding(.bottom, 12)
 
             Form {
-                Section("Projection") {
+                Section(String(localized: L10n.Settings.sectionProjection)) {
                     VStack(spacing: 16) {
                         FOVSectorControl(degrees: $maxFOVDegrees)
                             .frame(height: 120)
-                        Text("Maximum field of view when fully zoomed out (double-click to reset)")
+                        Text(L10n.Settings.fovHint)
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
                     .padding(.vertical, 4)
                 }
 
-                Section("Toolbar") {
-                    Toggle("Show toolbar when paused", isOn: $showControlsOnPause)
+                Section(String(localized: L10n.Settings.sectionToolbar)) {
+                    Toggle(isOn: $showControlsOnPause) {
+                        Text(L10n.Settings.showToolbarPaused)
+                    }
                     HStack {
-                        Text("Auto-hide delay")
+                        Text(L10n.Settings.autoHideDelay)
                         Spacer()
                         Text("\(String(format: "%.1f", autoHideDelay))s")
                             .foregroundStyle(.secondary)
@@ -53,23 +56,43 @@ struct SettingsView: View {
                     Slider(value: $autoHideDelay, in: 1...10, step: 0.5)
                 }
 
-                Section("Interaction") {
-                    Toggle("Single click to play/pause", isOn: $clickToPlayPause)
-                    Toggle("Natural scroll direction for volume", isOn: $naturalScrollVolume)
-                    Toggle("360° drag follows mouse direction", isOn: $dragFollowsMouse)
+                Section(String(localized: L10n.Settings.sectionInteraction)) {
+                    Toggle(isOn: $clickToPlayPause) { Text(L10n.Settings.clickToPlay) }
+                    Toggle(isOn: $naturalScrollVolume) { Text(L10n.Settings.naturalScroll) }
+                    Toggle(isOn: $dragFollowsMouse) { Text(L10n.Settings.dragFollowsMouse) }
                 }
 
-                Section("Playback Memory") {
-                    Toggle("Remember playback progress", isOn: $rememberProgress)
-                    Toggle("Remember 3D mode (layout & eye)", isOn: $rememberMode)
+                Section(String(localized: L10n.Settings.sectionPlaybackMemory)) {
+                    Toggle(isOn: $rememberProgress) { Text(L10n.Settings.rememberProgress) }
+                    Toggle(isOn: $rememberMode) { Text(L10n.Settings.rememberMode) }
                 }
 
-                Section("Playlist") {
-                    Toggle("Show playlist expand button", isOn: $showPlaylistButton)
+                Section(String(localized: L10n.Settings.sectionPlaylist)) {
+                    Toggle(isOn: $showPlaylistButton) { Text(L10n.Settings.showPlaylistButton) }
                 }
 
-                Section("Advanced") {
-                    Button("Open Log Directory") {
+                Section(String(localized: L10n.Settings.sectionLanguage)) {
+                    Picker(selection: $appLanguageRaw) {
+                        ForEach(AppLanguage.allCases) { lang in
+                            Text(lang.displayName).tag(lang.rawValue)
+                        }
+                    } label: {
+                        Text(L10n.Settings.sectionLanguage)
+                    }
+                    HStack {
+                        Text(L10n.Settings.languageRestartHint)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        Spacer()
+                        Button(String(localized: L10n.Settings.restartNow)) {
+                            relaunchApp()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+
+                Section(String(localized: L10n.Settings.sectionAdvanced)) {
+                    Button(String(localized: L10n.Settings.openLogDir)) {
                         let path = String(cString: mpv_player_get_log_dir())
                         let url = URL(fileURLWithPath: path, isDirectory: true)
                         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -79,7 +102,23 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 480, height: 560)
+        .frame(width: 480, height: 620)
+    }
+
+    private func relaunchApp() {
+        let url = Bundle.main.bundleURL
+        let pid = ProcessInfo.processInfo.processIdentifier
+        // 确保 UserDefaults 已写入磁盘
+        UserDefaults.standard.synchronize()
+        // 将重启逻辑放入后台子 shell，I/O 全部重定向到 /dev/null，
+        // 使其完全脱离父进程（避免父进程 exit 后子 shell 因管道断裂而终止）
+        let script = "(while kill -0 \(pid) 2>/dev/null; do sleep 0.1; done; open \"\(url.path)\") </dev/null >/dev/null 2>&1 &"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", script]
+        try? task.run()
+        // 强制退出：bypass terminate 流程，避免 sheet/窗口阻止退出
+        exit(0)
     }
 }
 

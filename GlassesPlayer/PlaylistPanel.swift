@@ -22,7 +22,7 @@ struct PlaylistPanel: View {
 
     private var header: some View {
         HStack(spacing: 0) {
-            Text("播放列表")
+            Text(L10n.Playlist.title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.9))
 
@@ -39,12 +39,12 @@ struct PlaylistPanel: View {
             modeButton(
                 mode: .manual,
                 icon: "hand.point.up.left.fill",
-                help: "手动展开"
+                help: L10n.Playlist.modeManualHelp.localized
             )
             modeButton(
                 mode: .auto,
                 icon: "cursorarrow.rays",
-                help: "鼠标靠近自动展开"
+                help: L10n.Playlist.modeAutoHelp.localized
             )
         }
         .padding(2)
@@ -117,10 +117,10 @@ struct PlaylistPanel: View {
             Image(systemName: "film.stack")
                 .font(.system(size: 28))
                 .foregroundStyle(.white.opacity(0.25))
-            Text("暂无播放列表")
+            Text(L10n.Playlist.emptyTitle)
                 .font(.system(size: 12))
                 .foregroundStyle(.white.opacity(0.4))
-            Text("打开视频文件后将显示同目录列表")
+            Text(L10n.Playlist.emptySubtitle)
                 .font(.system(size: 11))
                 .foregroundStyle(.white.opacity(0.25))
                 .multilineTextAlignment(.center)
