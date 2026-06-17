@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -101,12 +102,30 @@ struct SettingsView: View {
                     }
                 }
 
+                Section(String(localized: L10n.Settings.sectionFileAssociation)) {
+                    HStack {
+                        Spacer()
+                        Button(String(localized: L10n.Settings.setAsDefault)) {
+                            FileAssociationManager.setAsDefault()
+                        }
+                        .frame(width: 90)
+                        Button(String(localized: L10n.Settings.restoreDefault)) {
+                            FileAssociationManager.restoreDefault()
+                        }
+                        .frame(width: 90)
+                    }
+                }
+
                 Section(String(localized: L10n.Settings.sectionAdvanced)) {
-                    Button(String(localized: L10n.Settings.openLogDir)) {
-                        let path = String(cString: mpv_player_get_log_dir())
-                        let url = URL(fileURLWithPath: path, isDirectory: true)
-                        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-                        NSWorkspace.shared.open(url)
+                    HStack {
+                        Spacer()
+                        Button(String(localized: L10n.Settings.openLogDir)) {
+                            let path = String(cString: mpv_player_get_log_dir())
+                            let url = URL(fileURLWithPath: path, isDirectory: true)
+                            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                            NSWorkspace.shared.open(url)
+                        }
+                        .frame(width: 90)
                     }
                 }
             }
@@ -271,6 +290,39 @@ struct TickSlider: NSViewRepresentable {
             let raw = sender.doubleValue
             let snapped = (raw / parent.snapInterval).rounded() * parent.snapInterval
             parent.value = min(parent.range.upperBound, max(parent.range.lowerBound, snapped))
+        }
+    }
+}
+
+// MARK: - File Association Manager
+
+enum FileAssociationManager {
+    /// Common video file extensions to register
+    private static let videoExtensions = [
+        "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv",
+        "ts", "m4v", "mpg", "mpeg", "m2ts", "3gp", "ogv", "vob"
+    ]
+
+    /// Set GlassesPlayer as the default app for all common video types
+    static func setAsDefault() {
+        let appURL = Bundle.main.bundleURL
+        for ext in videoExtensions {
+            guard let uttype = UTType(filenameExtension: ext) else { continue }
+            NSWorkspace.shared.setDefaultApplication(at: appURL, toOpen: uttype, completion: nil)
+        }
+    }
+
+    /// Restore each video type to the next available handler (dynamic lookup, no snapshot)
+    static func restoreDefault() {
+        let myBundleID = Bundle.main.bundleIdentifier ?? ""
+        for ext in videoExtensions {
+            guard let uttype = UTType(filenameExtension: ext) else { continue }
+            let candidates = NSWorkspace.shared.urlsForApplications(toOpen: uttype)
+            // Pick the first app that isn't us
+            guard let alternative = candidates.first(where: {
+                Bundle(url: $0)?.bundleIdentifier != myBundleID
+            }) else { continue }
+            NSWorkspace.shared.setDefaultApplication(at: alternative, toOpen: uttype, completion: nil)
         }
     }
 }

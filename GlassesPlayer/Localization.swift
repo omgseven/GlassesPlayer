@@ -44,6 +44,7 @@ enum L10n {
         static let sectionPlaylist = LocalizedStringResource("settings_section_playlist")
         static let sectionAdvanced = LocalizedStringResource("settings_section_advanced")
         static let sectionLanguage = LocalizedStringResource("settings_section_language")
+        static let sectionFileAssociation = LocalizedStringResource("settings_section_file_association")
 
         static let fovHint = LocalizedStringResource("settings_fov_hint")
         static let cursorOpacity = LocalizedStringResource("settings_cursor_opacity")
@@ -56,6 +57,8 @@ enum L10n {
         static let rememberMode = LocalizedStringResource("settings_remember_mode")
         static let showPlaylistButton = LocalizedStringResource("settings_show_playlist_button")
         static let openLogDir = LocalizedStringResource("settings_open_log_dir")
+        static let setAsDefault = LocalizedStringResource("settings_set_as_default")
+        static let restoreDefault = LocalizedStringResource("settings_restore_default")
 
         static let languageSystem = LocalizedStringResource("settings_language_system")
         static let languageEnglish = LocalizedStringResource("settings_language_english")
