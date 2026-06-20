@@ -10,9 +10,22 @@
 		74F7AF882FD04D09001909F6 /* GlassesPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GlassesPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		74F7AFA02FD04D0B001909F6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 74F7AF872FD04D09001909F6 /* GlassesPlayer */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		74F7AF8A2FD04D09001909F6 /* GlassesPlayer */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				74F7AFA02FD04D0B001909F6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */,
+			);
 			path = GlassesPlayer;
 			sourceTree = "<group>";
 		};

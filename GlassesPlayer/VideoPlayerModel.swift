@@ -82,6 +82,8 @@ final class VideoPlayerModel {
     private var pollTimer: Timer?
     private var saveTimer: Timer?
     private var pendingSeekTime: Double?
+    private var pendingMetadataDetect = false
+    private var filenameDetected = false
     private let memory = PlaybackMemory()
     @ObservationIgnored nonisolated(unsafe) private var fileURL: URL?
     let playlist = PlaylistManager()
@@ -147,6 +149,19 @@ final class VideoPlayerModel {
             }
             if rememberProgress && record.progress > 0 && record.duration > 0 && record.progress < record.duration - 3 {
                 pendingSeekTime = record.progress
+            }
+            filenameDetected = false
+            pendingMetadataDetect = false
+        } else {
+            // No history — try auto-detection
+            if let detected = VideoTypeDetector.detectFromFilename(url.lastPathComponent) {
+                sourceLayout = detected
+                filenameDetected = true
+                pendingMetadataDetect = false
+                Logger.info("Auto-detected layout from filename: \(detected)")
+            } else {
+                filenameDetected = false
+                pendingMetadataDetect = true
             }
         }
     }
@@ -285,6 +300,18 @@ final class VideoPlayerModel {
         if flags & MPV_PROP_VIDEO_SIZE != 0 {
             videoWidth = Int(mpv_player_get_video_width(p))
             videoHeight = Int(mpv_player_get_video_height(p))
+
+            // Deferred metadata detection — only when filename didn't match
+            if pendingMetadataDetect {
+                pendingMetadataDetect = false
+                if let cStr = mpv_player_get_stereo_mode(p) {
+                    let mode = String(cString: cStr)
+                    if let detected = VideoTypeDetector.detectFromMetadata(stereoMode: mode) {
+                        sourceLayout = detected
+                        Logger.info("Auto-detected layout from metadata: \(detected)")
+                    }
+                }
+            }
         }
         if flags & MPV_PROP_EOF != 0 {
             handlePlaybackEnd()

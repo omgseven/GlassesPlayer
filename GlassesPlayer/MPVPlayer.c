@@ -902,6 +902,20 @@ void mpv_player_set_speed(MPVPlayer *p, double speed) {
     mpv_set_property(p->mpv, "speed", MPV_FORMAT_DOUBLE, &speed);
 }
 
+// Stereo 3D mode
+static char stereo_mode_buf[64] = {0};
+
+const char *mpv_player_get_stereo_mode(MPVPlayer *p) {
+    if (!p || !p->mpv) return NULL;
+    char *val = NULL;
+    if (mpv_get_property(p->mpv, "video-params/stereo-in", MPV_FORMAT_STRING, &val) >= 0 && val) {
+        snprintf(stereo_mode_buf, sizeof(stereo_mode_buf), "%s", val);
+        mpv_free(val);
+        return stereo_mode_buf;
+    }
+    return NULL;
+}
+
 // MARK: - Event polling
 
 int mpv_player_poll_events(MPVPlayer *p) {

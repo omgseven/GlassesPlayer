@@ -67,4 +67,8 @@ void mpv_player_log_message(const char *tag, const char *message);
 // Returns the current session log file path (NULL if not initialized).
 const char *mpv_player_get_log_path(void);
 
+// Get the stereo 3D mode reported by mpv (e.g. "sbs2l", "ab2l").
+// Returns a static string or NULL if unavailable. Caller must NOT free.
+const char *mpv_player_get_stereo_mode(MPVPlayer *p);
+
 #endif
